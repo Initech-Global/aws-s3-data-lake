@@ -26,7 +26,7 @@ Resources:
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Environment}-Sample-Lambda-Role"
+      RoleName: !Sub "${Environment}-Twitter-Lambda-Role"
       AssumeRolePolicyDocument:
         Statement:
           - Action:
@@ -56,7 +56,7 @@ Resources:
                   - kinesis:GetRecords
                   - kinesis:GetShardIterator
                   - kinesis:ListStreams
-                Resource: !Sub arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/${Environment}-Sample-Events-Stream
+                Resource: !Sub arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/${Environment}-Twitter-Events-Stream
         - PolicyName: AllowKMSKeyAccess
           PolicyDocument:
             Version: "2012-10-17"
@@ -87,37 +87,49 @@ Resources:
       Code:
         ZipFile: |
           const AWS = require("aws-sdk");
-          var kinesis = new AWS.Kinesis();        
-          exports.handler = function(event, context, callback) {
-          var record = {
-              Data: JSON.stringify(event),
-              PartitionKey: String(Date.now())
-          };
-          var records = [];
-          records.push(record);
-          var recordsParams = {
+          var kinesis = new AWS.Kinesis();
+          exports.handler = function (event, context, callback) {
+            var records = [];
+            event.forEach((element) => {
+              const tweet = {
+                full_text: element.full_text,
+                user: element.user.screen_name,
+                created_at: element.created_at,
+              };
+              var record = {
+                Data: JSON.stringify(tweet),
+                PartitionKey: String(Date.now()),
+              };
+              records.push(record);
+            });
+            console.log("records", records);
+            var recordsParams = {
               Records: records,
-              StreamName: "DV-Sample-Events-Stream"
-          };   
-          kinesis.putRecords(recordsParams, function(err, data) {
+              StreamName: process.env.STREAM_NAME,
+            };
+            kinesis.putRecords(recordsParams, function (err, data) {
               if (err) {
-              callback(err);
-              console.log("error:", err);
+                callback(err);
+                console.log("error:", err);
               } else {
-              console.log("sucess", data);
-              callback(null, data);
+                console.log("sucess", data);
+                callback(null, data);
               }
-          });
+            });
           };
       Handler: index.handler
       Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          STREAM_NAME: !Sub ${Environment}-Twitter-Events-Stream
+
       Runtime: nodejs10.x
       Timeout: 60
 
   KinesisKmsKey:
     Type: AWS::KMS::Key
     Properties:
-      Description: Key for the Sample Kinesis Stream
+      Description: Key for the Twitter Kinesis Stream
       EnableKeyRotation: true
       Enabled: true
       KeyPolicy:
@@ -144,11 +156,11 @@ Resources:
               - kms:DescribeKey
             Resource: "*"
 
-  SampleBucketKmsKey:
+  TwitterBucketKmsKey:
     Type: AWS::KMS::Key
     DependsOn: KinesisS3DeliveryStreamRole
     Properties:
-      Description: Key for the Sample S3 Bucket
+      Description: Key for the Twitter S3 Bucket
       EnableKeyRotation: true
       Enabled: true
       KeyPolicy:
@@ -165,7 +177,7 @@ Resources:
           - Sid: Allow use of the key.
             Effect: Allow
             Principal:
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:role/${Environment}-Sample-Kinesis-S3-Delivery-Stream-Role"
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:role/${Environment}-Twitter-Kinesis-S3-Delivery-Stream-Role"
             Action:
               - kms:Encrypt
               - kms:Decrypt
@@ -174,32 +186,32 @@ Resources:
               - kms:DescribeKey
             Resource: "*"
 
-  SampleEventsStream:
+  TwitterEventsStream:
     Type: AWS::Kinesis::Stream
     Properties:
-      Name: !Sub ${Environment}-Sample-Events-Stream
+      Name: !Sub ${Environment}-Twitter-Events-Stream
       ShardCount: 1
       StreamEncryption:
         EncryptionType: KMS
         KeyId: !Ref KinesisKmsKey
 
-  SampleEventsBucket:
+  TwitterEventsBucket:
     Type: "AWS::S3::Bucket"
     Properties:
       BucketName: !Sub
-        - "${EnvLower}-sample-events-${AWS::AccountId}"
+        - "${EnvLower}-twitter-events-${AWS::AccountId}"
         - EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower]
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
-              KMSMasterKeyID: !Ref SampleBucketKmsKey
+              KMSMasterKeyID: !Ref TwitterBucketKmsKey
               SSEAlgorithm: "aws:kms"
 
-  SampleEventsRawBucket:
+  TwitterEventsRawBucket:
     Type: "AWS::S3::Bucket"
     Properties:
       BucketName: !Sub
-        - "${EnvLower}-sample-events-${AWS::AccountId}-raw"
+        - "${EnvLower}-twitter-events-${AWS::AccountId}-raw"
         - EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower]
       LifecycleConfiguration:
         Rules:
@@ -209,13 +221,13 @@ Resources:
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
-              KMSMasterKeyID: !Ref SampleBucketKmsKey
+              KMSMasterKeyID: !Ref TwitterBucketKmsKey
               SSEAlgorithm: "aws:kms"
 
   KinesisS3DeliveryStreamRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Environment}-Sample-Kinesis-S3-Delivery-Stream-Role"
+      RoleName: !Sub "${Environment}-Twitter-Kinesis-S3-Delivery-Stream-Role"
       AssumeRolePolicyDocument:
         Statement:
           - Action:
@@ -226,7 +238,7 @@ Resources:
                 - firehose.amazonaws.com
         Version: 2012-10-17
       Policies:
-        - PolicyName: !Sub "${Environment}-Sample-Kinesis-S3-Delivery-Stream-Policy"
+        - PolicyName: !Sub "${Environment}-Twitter-Kinesis-S3-Delivery-Stream-Policy"
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -246,16 +258,16 @@ Resources:
                   - s3:PutObject
                 Resource:
                   - !Sub
-                    - "arn:aws:s3:::${EnvLower}-sample-events-${AWS::AccountId}"
+                    - "arn:aws:s3:::${EnvLower}-twitter-events-${AWS::AccountId}"
                     - EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower]
                   - !Sub
-                    - "arn:aws:s3:::${EnvLower}-sample-events-${AWS::AccountId}/*"
+                    - "arn:aws:s3:::${EnvLower}-twitter-events-${AWS::AccountId}/*"
                     - EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower]
                   - !Sub
-                    - "arn:aws:s3:::${EnvLower}-sample-events-${AWS::AccountId}-raw"
+                    - "arn:aws:s3:::${EnvLower}-twitter-events-${AWS::AccountId}-raw"
                     - EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower]
                   - !Sub
-                    - "arn:aws:s3:::${EnvLower}-sample-events-${AWS::AccountId}-raw/*"
+                    - "arn:aws:s3:::${EnvLower}-twitter-events-${AWS::AccountId}-raw/*"
                     - EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower]
               - Effect: Allow
                 Action:
@@ -263,7 +275,7 @@ Resources:
                   - kinesis:GetShardIterator
                   - kinesis:GetRecords
                 Resource:
-                  - !Sub arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/${Environment}-Sample-Events-Stream
+                  - !Sub arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/${Environment}-Twitter-Events-Stream
               - Effect: Allow
                 Action:
                   - kms:Decrypt
@@ -276,17 +288,17 @@ Resources:
                 Resource:
                   - !GetAtt KinesisKmsKey.Arn
 
-  SampleEventsFirehose:
+  TwitterEventsFirehose:
     Type: AWS::KinesisFirehose::DeliveryStream
     DependsOn: KinesisS3DeliveryStreamRole
     Properties:
-      DeliveryStreamName: !Sub ${Environment}-Sample-Events-Firehose-S3
+      DeliveryStreamName: !Sub ${Environment}-Twitter-Events-Firehose-S3
       DeliveryStreamType: KinesisStreamAsSource
       KinesisStreamSourceConfiguration:
-        KinesisStreamARN: !GetAtt SampleEventsStream.Arn
+        KinesisStreamARN: !GetAtt TwitterEventsStream.Arn
         RoleARN: !GetAtt KinesisS3DeliveryStreamRole.Arn
       ExtendedS3DestinationConfiguration:
-        BucketARN: !GetAtt SampleEventsBucket.Arn
+        BucketARN: !GetAtt TwitterEventsBucket.Arn
         Prefix: "year=!{timestamp:YYYY}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/"
         ErrorOutputPrefix: "!{firehose:error-output-type}/year=!{timestamp:YYYY}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/"
         BufferingHints:
@@ -295,17 +307,17 @@ Resources:
         CompressionFormat: UNCOMPRESSED
         EncryptionConfiguration:
           KMSEncryptionConfig:
-            AWSKMSKeyARN: !GetAtt SampleBucketKmsKey.Arn
+            AWSKMSKeyARN: !GetAtt TwitterBucketKmsKey.Arn
         S3BackupMode: Enabled
         S3BackupConfiguration:
-          BucketARN: !GetAtt SampleEventsRawBucket.Arn
+          BucketARN: !GetAtt TwitterEventsRawBucket.Arn
           BufferingHints:
             IntervalInSeconds: 60
             SizeInMBs: 1
           CompressionFormat: UNCOMPRESSED
           EncryptionConfiguration:
             KMSEncryptionConfig:
-              AWSKMSKeyARN: !GetAtt SampleBucketKmsKey.Arn
+              AWSKMSKeyARN: !GetAtt TwitterBucketKmsKey.Arn
           Prefix: "year=!{timestamp:YYYY}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/"
           ErrorOutputPrefix: "!{firehose:error-output-type}/year=!{timestamp:YYYY}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/"
           RoleARN: !GetAtt KinesisS3DeliveryStreamRole.Arn
@@ -314,8 +326,8 @@ Resources:
           SchemaConfiguration:
             CatalogId: !Ref AWS::AccountId
             RoleARN: !GetAtt KinesisS3DeliveryStreamRole.Arn
-            DatabaseName: !Ref SampleEventsGlueDatabase
-            TableName: !Ref SampleEventsGlueTable
+            DatabaseName: !Ref TwitterEventsGlueDatabase
+            TableName: !Ref TwitterEventsGlueTable
             Region: !Ref AWS::Region
             VersionId: LATEST
           InputFormatConfiguration:
@@ -326,27 +338,27 @@ Resources:
               ParquetSerDe: {}
           Enabled: True
 
-  SampleEventsGlueDatabase:
+  TwitterEventsGlueDatabase:
     Type: AWS::Glue::Database
     Properties:
       CatalogId: !Ref AWS::AccountId
       DatabaseInput:
-        Description: Database for Sample Tables
+        Description: Database for Twitter Tables
         Name: !Sub
-          - ${EnvLower}-sample-events-db
+          - ${EnvLower}-twitter-events-db
           - { EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower] }
 
-  SampleEventsGlueTable:
+  TwitterEventsGlueTable:
     Type: AWS::Glue::Table
     Properties:
       CatalogId: !Ref AWS::AccountId
-      DatabaseName: !Ref SampleEventsGlueDatabase
+      DatabaseName: !Ref TwitterEventsGlueDatabase
       TableInput:
-        Description: Table for Sample
+        Description: Table for Twitter
         TableType: EXTERNAL_TABLE
         Parameters: { "classification": "parquet", "compressionType": "none" }
         Name: !Sub
-          - "${EnvLower}_sample_events_${AWS::AccountId}"
+          - "${EnvLower}_twitter_events_${AWS::AccountId}"
           - EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower]
         PartitionKeys:
           - Name: year
@@ -359,12 +371,14 @@ Resources:
             Type: bigint
         StorageDescriptor:
           Columns:
-            - Name: event
-              Type: struct<staffName:string,staffId:int,emailId:string,status:string>
-            - Name: metadata
-              Type: struct<appName:string,eventType:string,sourceTimestamp:timestamp>
+            - Name: full_text
+              Type: string
+            - Name: user
+              Type: string
+            - Name: created_at
+              Type: string
           Location: !Sub
-            - s3://${EnvLower}-sample-events-${AWS::AccountId}/
+            - s3://${EnvLower}-twitter-events-${AWS::AccountId}/
             - { EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower] }
           InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
           OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
@@ -373,11 +387,11 @@ Resources:
             Parameters:
               serialization.format: "1"
 
-  SampleEventsS3CrawlerRole:
+  TwitterEventsS3CrawlerRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub
-        - ${EnvLower}-sample-events-glue-s3-crawler-role
+        - ${EnvLower}-twitter-events-glue-s3-crawler-role
         - { EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower] }
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
@@ -393,7 +407,7 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
       Policies:
         - PolicyName: !Sub
-            - ${EnvLower}-sample-events-glue-s3-crawler-policy
+            - ${EnvLower}-twitter-events-glue-s3-crawler-policy
             - { EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower] }
           PolicyDocument:
             Version: "2012-10-17"
@@ -403,31 +417,31 @@ Resources:
                   - s3:GetObject
                   - s3:PutObject
                 Resource: !Sub
-                  - "arn:aws:s3:::${EnvLower}-sample-events-${AWS::AccountId}/*"
+                  - "arn:aws:s3:::${EnvLower}-twitter-events-${AWS::AccountId}/*"
                   - {
                       EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower],
                     }
               - Effect: Allow
                 Action:
                   - kms:Decrypt
-                Resource: !GetAtt SampleBucketKmsKey.Arn
+                Resource: !GetAtt TwitterBucketKmsKey.Arn
 
-  SampleEventsS3Crawler:
+  TwitterEventsS3Crawler:
     Type: AWS::Glue::Crawler
-    DependsOn: SampleEventsGlueTable
+    DependsOn: TwitterEventsGlueTable
     Properties:
       Name: !Sub
-        - ${EnvLower}-sample-events-s3-crawler
+        - ${EnvLower}-twitter-events-s3-crawler
         - { EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower] }
       Description: Scans S3 and load new partitions
-      DatabaseName: !Ref SampleEventsGlueDatabase
-      Role: !GetAtt SampleEventsS3CrawlerRole.Arn
+      DatabaseName: !Ref TwitterEventsGlueDatabase
+      Role: !GetAtt TwitterEventsS3CrawlerRole.Arn
       Schedule:
         ScheduleExpression: cron(15,45 * ? * * *)
       Targets:
         S3Targets:
           - Path: !Sub
-              - "s3://${EnvLower}-sample-events-${AWS::AccountId}/"
+              - "s3://${EnvLower}-twitter-events-${AWS::AccountId}/"
               - EnvLower: !FindInMap [EnvMap, !Ref Environment, EnvLower]
       SchemaChangePolicy:
         DeleteBehavior: DELETE_FROM_DATABASE
@@ -439,8 +453,8 @@ Resources:
         "Tables":{"AddOrUpdateBehavior":"MergeNewColumns"}}}'
 
 Outputs:
-  SampleEventsStreamName:
-    Description: "Name of sample events stream"
-    Value: !Ref "SampleEventsStream"
+  TwitterEventsStreamName:
+    Description: "Name of twitter events stream"
+    Value: !Ref "TwitterEventsStream"
     Export:
-      Name: !Sub "SampleEventsStreamName-${Environment}"
+      Name: !Sub "TwitterEventsStreamName-${Environment}"
